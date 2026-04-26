@@ -21,12 +21,10 @@ RUN corepack enable
 WORKDIR /openclaw
 
 # Pin to a known-good ref (tag/branch). Override in Railway template settings if needed.
-# Using a released tag avoids build breakage when `main` temporarily references unpublished packages.
 ARG OPENCLAW_GIT_REF=v2026.4.2
 RUN git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" https://github.com/openclaw/openclaw.git .
 
 # Patch: relax version requirements for packages that may reference unpublished versions.
-# Apply to all extension package.json files to handle workspace protocol (workspace:*).
 RUN set -eux; \
   find ./extensions -name 'package.json' -type f | while read -r f; do \
     sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*">=[^"]+"/"openclaw": "*"/g' "$f"; \
@@ -51,12 +49,10 @@ RUN apt-get update \
     python3-venv \
   && rm -rf /var/lib/apt/lists/*
 
-# `openclaw update` expects pnpm. Provide it in the runtime image.
+# Provide pnpm for openclaw update
 RUN corepack enable && corepack prepare pnpm@10.23.0 --activate
 
 # Persist user-installed tools by default by targeting the Railway volume.
-# - npm global installs -> /data/npm
-# - pnpm global installs -> /data/pnpm (binaries) + /data/pnpm-store (store)
 ENV NPM_CONFIG_PREFIX=/data/npm
 ENV NPM_CONFIG_CACHE=/data/npm-cache
 ENV PNPM_HOME=/data/pnpm
@@ -65,25 +61,17 @@ ENV PATH="/data/npm/bin:/data/pnpm:${PATH}"
 
 WORKDIR /app
 
-# Wrapper deps
-COPY package.json ./
-RUN npm install --omit=dev && npm cache clean --force
-
 # Copy built openclaw
 COPY --from=openclaw-build /openclaw /openclaw
 
-# Provide an openclaw executable
+# Provide an openclaw executable (wrapper with correct shebang)
 RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"' > /usr/local/bin/openclaw \
   && chmod +x /usr/local/bin/openclaw
 
-COPY src ./src
-
-# The wrapper listens on $PORT.
-# IMPORTANT: Do not set a default PORT here.
-# Railway injects PORT at runtime and routes traffic to that port.
-# If we force a different port, deployments can come up but the domain will route elsewhere.
+# Expose the gateway port (Railway injects $PORT=8080)
 EXPOSE 8080
 
-# Ensure PID 1 reaps zombies and forwards signals.
 ENTRYPOINT ["tini", "--"]
+
+# ⭐ Run ONLY the gateway as PID 1
 CMD ["openclaw", "gateway"]
